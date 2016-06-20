@@ -31,7 +31,7 @@ module SAT(
   , withNewSolver
 
   -- * Literals
-  , Lit
+  , Lit(..)
   , newLit
   , false, true
   , bool
