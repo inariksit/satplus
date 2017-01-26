@@ -88,3 +88,9 @@ count s = U.count s . map literal
 
 solveMaximize :: Solver -> [Lit] -> Unary -> IO Bool
 solveMaximize s ass obj = O.solveMaximize s (map literal ass) obj
+
+--------------------------------------------------------------------------------
+
+
+atMostOne :: Solver -> [Lit] -> IO ()
+atMostOne s = B.atMostOneOr s . map literal
