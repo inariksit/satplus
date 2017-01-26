@@ -93,4 +93,4 @@ solveMaximize s ass obj = O.solveMaximize s (map literal ass) obj
 
 
 atMostOne :: Solver -> [Lit] -> IO ()
-atMostOne s = B.atMostOneOr s . map literal
+atMostOne s = B.atMostOne s . map literal
