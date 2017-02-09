@@ -19,11 +19,14 @@ module SAT.Unary(
   , count
   , add
   , addList
+  , mul1
+  , mul
 
   -- * Operations
   , invert
   , succ
   , pred
+  , (**)
   , (//)
   , modulo
 
@@ -39,7 +42,7 @@ import SAT.Equal
 import SAT.Order
 import Data.List( sort, insert, transpose )
 
-import Prelude hiding ( Enum(succ,pred) )
+import Prelude hiding ( Enum(succ,pred), (**) )
 
 ------------------------------------------------------------------------------
 
@@ -95,6 +98,12 @@ Unary n xs .> k
   | k < 0     = true
   | k >= n    = false
   | otherwise = xs !! k
+
+-- | Integer multiplication by a (non-negative) constant.
+(**) :: Unary -> Int -> Unary
+Unary n xs ** k =
+  -- Idea: expand every literal k times.
+  Unary (n * k) (concat [ replicate k x | x <- xs ])
 
 -- | Integer division by a (strictly positive) constant.
 (//) :: Unary -> Int -> Unary
@@ -205,6 +214,19 @@ addList s us = go (sort us)
   go (u1:u2:us) =
     do u <- add s u1 u2
        go (insert u us)
+
+-- | Multiplies a digit and a unary number.
+mul1 :: Solver -> Lit -> Unary -> IO Unary
+mul1 s x (Unary m ys) =
+  do ys' <- sequence [ andl s [x,y] | y <- ys ]
+     return (Unary m ys')
+
+-- | Multiplies two unary numbers.
+mul :: Solver -> Unary -> Unary -> IO Unary
+mul s (Unary n xs) b@(Unary m ys) | n <= m =
+  do bs <- sequence [ mul1 s x b | x <- xs ]
+     addList s bs
+mul s x y = mul s y x
 
 -- | Return the numeric value of a unary number in the current model.
 -- (/Use only when 'solve' has returned True!/)
