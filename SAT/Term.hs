@@ -34,12 +34,17 @@ module SAT.Term(
     Term
   , SAT.Term.number
   , newTerm
+  , newTermFrom
   , fromList
+  , fromBinary
+  , dumbFromUnary
+  , fromUnary
   , toList
   , (.+.)
   , (.-.)
   , (.*)
   , minus
+  , multiply
   , minValue
   , SAT.Term.maxValue
   , SAT.Term.modelValue
@@ -47,8 +52,11 @@ module SAT.Term(
  where
 
 import SAT as S
+import SAT.Bool
 import SAT.Equal
 import SAT.Order
+import qualified SAT.Binary as B
+import qualified SAT.Unary  as U
 
 import Data.List( sort, group, sortBy, groupBy, minimumBy )
 import Data.Ord( comparing )
@@ -102,13 +110,95 @@ newTerm s n = go [] 1 n
       [     xs | xs <- atLeast (b-a) (s-a) axs ] ++
       [ x : xs | xs <- atLeast b     (s-a) axs ]
 
+-- | Create a fresh term that can represent all numbers in the given list.
+-- (Possibly more numbers, but never numbers smaller than the minimum or larger
+-- than the maximum in the list.) 
+newTermFrom :: Solver -> [Integer] -> IO Term
+newTermFrom s [] = return (number 0)
+newTermFrom s ns = do t <- go (map (subtract n0) ns')
+                      return (t .+. number n0)
+ where
+  ns' = map head . group . sort $ ns
+  n0  = minimum ns'
+ 
+  go [n] =
+    do return (number n) -- n should be 0 here...
+
+  go ns =
+    do x <- newLit s
+       t <- go ([ n | n <- ns, n < k ] `merge` [ n-k | n <- ns, n >= k ])
+       return (fromList [(k,x)] .+. t)
+   where
+    k = compressor ns
+    
+    compressor ns = go ns
+     where
+      m = last ns
+    
+      go (x:y:xs) | 2*y > m = m-x
+      go (_:xs)             = go xs
+    
+    []     `merge` ys     = ys
+    xs     `merge` []     = xs
+    (x:xs) `merge` (y:ys) =
+      case x `compare` y of
+        LT -> x : (xs `merge` (y:ys))
+        EQ -> x : (xs `merge` ys)
+        GT -> y : ((x:xs) `merge` ys)
+
 -- | Create a constant term.
 number :: Integer -> Term
+number 0 = Term []
 number n = Term [(n,true)]
 
 -- | Create a term from a list of products.
 fromList :: [(Integer,Lit)] -> Term
 fromList axs = Term axs
+
+-- | Create a term from a binary number.
+fromBinary :: B.Binary -> Term
+fromBinary b = Term [ (2^i,x) | (i,x) <- [0..] `zip` B.toList b ]
+
+-- | Create a term from a unary number, the dumb way. This ignores the invariant
+-- that unary numbers obey, but avoids creating new literals and clauses. Works OK
+-- for unary numbers with few digits. The number of literals in the resulting term
+-- is linear in the size of the unary number.
+dumbFromUnary :: U.Unary -> Term
+dumbFromUnary u = Term [ (1,x) | x <- U.toList u ]
+
+-- | Create a term from a unary number, making use of the invariant
+-- that unary numbers obey. This may create extra literals and clauses. The number
+-- of literals in the resulting term is logarithmic in the size of the unary number.
+fromUnary :: Solver -> U.Unary -> IO Term
+fromUnary s u = Term `fmap` go (length xs) xs
+ where
+  xs = U.toList u
+
+  go k xs | k <= 2 =
+    do return [(1,x)|x<-xs]
+  
+  go k xs =
+    do ys <- sequence
+             [ do y <- newLit s
+                  addClause s [       neg x1,     y]
+                  addClause s [neg x,     x1, neg y]
+                  addClause s [    x, neg x0,     y]
+                  addClause s [           x0, neg y]
+                  return y
+             | (x0,x1) <- xs0 `zipp` xs1
+             ]
+       zs <- go (k-i) ys
+       return ((fromIntegral i,x):zs)
+   where
+    i   = (k+1) `div` 2
+    xs0 = take (i-1) xs
+    x   = xs!!(i-1)
+    xs1 = drop i xs
+    
+    []     `zipp` []     = []
+    xs     `zipp` []     = xs `zipp` [false]
+    []     `zipp` ys     = [false] `zipp` ys
+    (x:xs) `zipp` (y:ys) = (x,y):zipp xs ys
 
 -- | Add two terms.
 (.+.) :: Term -> Term -> Term
@@ -125,6 +215,29 @@ c .* Term axs = Term [ (c*a,x) | c /= 0, (a,x) <- axs, a /= 0 ]
 -- | Negate a term.
 minus :: Term -> Term
 minus t = (-1) .* t
+
+-- | Multiply a term by another term (creates extra clauses and literals).
+multiply :: Solver -> Term -> Term -> IO Term
+multiply s (Term axs) (Term bys) =
+  do cxs <- sequence
+            [ do z <- andl s [x,y]
+                 return (a*b,z)
+            | (a,x) <- norm axs
+            , a /= 0
+            , (b,y) <- norm bys
+            , b /= 0
+            ]
+     return (Term cxs)
+ where
+  -- TODO: could also merge positive/negative literals here
+  norm = filter ((/=0) . fst)
+       . map (\(xas@((x,_):_)) -> (sum (map snd xas),x))
+       . groupBy (\(x,_) (y,_) -> x == y)
+       . sort
+       . map swap
+       . filter ((/=false) . snd)
+
+  swap (a,x) = (x,a)
 
 -- | Compute the minimum value of a term.
 minValue :: Term -> Integer
